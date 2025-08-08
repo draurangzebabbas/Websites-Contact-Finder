@@ -522,12 +522,25 @@ app.post('/api/extract-contacts', rateLimitMiddleware, authMiddleware, async (re
       email_found: r.email_found
     })));
     
-    res.json({
-      request_id: requestId,
-      domains_processed: domains.length,
-      processing_time: processingTime,
-      results: finalResults
-    });
+    // Return flat JSON without results array wrapper for Make.com
+    if (finalResults.length === 1) {
+      // Single domain - return the result directly
+      res.json({
+        request_id: requestId,
+        domains_processed: domains.length,
+        processing_time: processingTime,
+        ...finalResults[0]  // Spread the result object directly
+      });
+    } else {
+      // Multiple domains - return array of flat objects
+      const flatResults = finalResults.map(result => ({
+        request_id: requestId,
+        domains_processed: domains.length,
+        processing_time: processingTime,
+        ...result  // Spread each result object
+      }));
+      res.json(flatResults);
+    }
 
   } catch (error) {
     console.error('Contact extraction error:', error);
