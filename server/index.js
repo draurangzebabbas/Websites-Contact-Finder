@@ -489,44 +489,30 @@ app.post('/api/extract-contacts', rateLimitMiddleware, authMiddleware, async (re
     }).eq('request_id', requestId);
 
     const finalResults = results.map(result => {
-      // Format contact data as readable text
-      const emailsText = result.emails?.join('\n') || 'No emails found';
-      const phonesText = result.phones?.join('\n') || 'No phones found';
-      const linkedInsText = result.linkedIns?.join('\n') || 'No LinkedIn found';
-      const socialMediaText = [
-        ...(result.instagrams || []),
-        ...(result.facebooks || []),
-        ...(result.twitters || []),
-        ...(result.youtubes || []),
-        ...(result.tiktoks || []),
-        ...(result.pinterests || []),
-        ...(result.discords || []),
-        ...(result.telegrams || [])
-      ].join('\n') || 'No social media found';
-
+      // Create flat JSON structure for Google Sheets
       return {
         domain: result.domain,
         api_key_used: result.api_key_used,
         page_scraped: result.page_scraped,
-        emails: result.emails,
-        phones: result.phones,
-        linkedIns: result.linkedIns,
-        social_media: {
-          instagrams: result.instagrams,
-          facebooks: result.facebooks,
-          twitters: result.twitters,
-          youtubes: result.youtubes,
-          tiktoks: result.tiktoks,
-          pinterests: result.pinterests,
-          discords: result.discords,
-          telegrams: result.telegrams
-        },
         email_found: result.email_found,
         total_contacts: result.total_contacts,
-        emails_text: emailsText,
-        phones_text: phonesText,
-        linkedin_text: linkedInsText,
-        social_media_text: socialMediaText
+        // Emails as comma-separated string
+        emails: result.emails?.join(', ') || 'No emails found',
+        // Phones as comma-separated string
+        phones: result.phones?.join(', ') || 'No phones found',
+        // LinkedIn as comma-separated string
+        linkedin: result.linkedIns?.join(', ') || 'No LinkedIn found',
+        // Social media as flat fields
+        instagram: result.instagrams?.join(', ') || 'No Instagram found',
+        facebook: result.facebooks?.join(', ') || 'No Facebook found',
+        twitter: result.twitters?.join(', ') || 'No Twitter found',
+        youtube: result.youtubes?.join(', ') || 'No YouTube found',
+        tiktok: result.tiktoks?.join(', ') || 'No TikTok found',
+        pinterest: result.pinterests?.join(', ') || 'No Pinterest found',
+        discord: result.discords?.join(', ') || 'No Discord found',
+        telegram: result.telegrams?.join(', ') || 'No Telegram found',
+        // Error field if any
+        error: result.error || null
       };
     });
     
