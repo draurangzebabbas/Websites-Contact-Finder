@@ -646,6 +646,255 @@ app.post('/api/test-webhook', authMiddleware, async (req, res) => {
   }
 });
 
+// New endpoint for tab-separated output (Google Sheets friendly)
+app.post('/api/extract-contacts-sheets', rateLimitMiddleware, authMiddleware, async (req, res) => {
+  const startTime = Date.now();
+  const requestId = uuidv4();
+  
+  try {
+    const { domains } = req.body;
+    
+    if (!domains || !Array.isArray(domains) || domains.length === 0) {
+      return res.status(400).json({ 
+        error: 'Invalid request', 
+        message: 'Domains array is required and must not be empty' 
+      });
+    }
+
+    if (domains.length > 30) {
+      return res.status(400).json({ 
+        error: 'Too many domains', 
+        message: 'Maximum 30 domains allowed per request' 
+      });
+    }
+
+    // Log the request
+    await supabase.from('analysis_logs').insert({
+      user_id: req.user.id,
+      request_id: requestId,
+      keywords: domains,
+      status: 'pending'
+    });
+
+    // Get user's API keys
+    const { data: apiKeys, error: keysError } = await supabase
+      .from('api_keys')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .in('status', ['active', 'failed', 'rate_limited'])
+      .order('last_used', { ascending: true, nullsFirst: true });
+
+    if (keysError || !apiKeys || apiKeys.length === 0) {
+      await supabase.from('analysis_logs').update({
+        status: 'failed',
+        error_message: 'No API keys available',
+        processing_time: Date.now() - startTime
+      }).eq('request_id', requestId);
+
+      return res.status(400).json({ 
+        error: 'No API keys', 
+        message: 'Please add at least one Apify API key' 
+      });
+    }
+
+    console.log(`🔑 Found ${apiKeys.length} API keys for user ${req.user.id}`);
+
+    const results = [];
+    const usedKeys = [];
+    let currentKeyIndex = 0;
+
+    // Process each domain
+    for (const domain of domains) {
+      let success = false;
+      let attempts = 0;
+      const maxAttempts = Math.min(3, apiKeys.length);
+
+      while (!success && attempts < maxAttempts) {
+        const currentKey = apiKeys[currentKeyIndex % apiKeys.length];
+        
+        try {
+          // Try main domain first
+          let contactResult = await callContactInfoScraper(domain, currentKey.api_key);
+          
+          // If no emails found, try /contact
+          if (contactResult.emails.length === 0) {
+            console.log(`📧 No emails found on main page, trying /contact for ${domain}`);
+            contactResult = await callContactInfoScraper(domain, currentKey.api_key, '/contact');
+          }
+          
+          // If still no emails found, try /contact-us
+          if (contactResult.emails.length === 0) {
+            console.log(`📧 No emails found on /contact, trying /contact-us for ${domain}`);
+            contactResult = await callContactInfoScraper(domain, currentKey.api_key, '/contact-us');
+          }
+
+          const result = {
+            domain: domain,
+            api_key_used: currentKey.key_name,
+            page_scraped: contactResult.page_scraped,
+            emails: contactResult.emails,
+            phones: contactResult.phones,
+            linkedIns: contactResult.linkedIns,
+            twitters: contactResult.twitters,
+            instagrams: contactResult.instagrams,
+            facebooks: contactResult.facebooks,
+            youtubes: contactResult.youtubes,
+            tiktoks: contactResult.tiktoks,
+            pinterests: contactResult.pinterests,
+            discords: contactResult.discords,
+            snapchats: contactResult.snapchats,
+            threads: contactResult.threads,
+            telegrams: contactResult.telegrams,
+            email_found: contactResult.emails.length > 0,
+            total_contacts: contactResult.emails.length + contactResult.phones.length
+          };
+          
+          console.log(`✅ Created result for ${domain}:`, {
+            domain: result.domain,
+            api_key_used: result.api_key_used,
+            email_found: result.email_found,
+            total_contacts: result.total_contacts
+          });
+          
+          results.push(result);
+
+          // Update key usage
+          await supabase.from('api_keys').update({
+            last_used: new Date().toISOString(),
+            failure_count: 0,
+            status: 'active'
+          }).eq('id', currentKey.id);
+
+          usedKeys.push(currentKey.id);
+          success = true;
+          console.log(`✅ Successfully used API key: ${currentKey.key_name}`);
+          
+        } catch (error) {
+          console.error(`❌ Error with API key ${currentKey.key_name}:`, error.message);
+          
+          // Check if it's a rate limit, credit issue, or invalid key
+          const isRateLimit = error.message.includes('rate') || error.message.includes('credit') || error.message.includes('429');
+          const isInvalidKey = error.message.includes('Invalid API key') || error.message.includes('401');
+          
+          if (isRateLimit) {
+            await supabase.from('api_keys').update({
+              status: 'rate_limited',
+              last_failed: new Date().toISOString(),
+              failure_count: currentKey.failure_count + 1
+            }).eq('id', currentKey.id);
+            console.log(`⚠️ Marked API key as rate limited: ${currentKey.key_name}`);
+          } else if (isInvalidKey) {
+            await supabase.from('api_keys').update({
+              status: 'failed',
+              last_failed: new Date().toISOString(),
+              failure_count: currentKey.failure_count + 1
+            }).eq('id', currentKey.id);
+            console.log(`❌ Marked API key as failed: ${currentKey.key_name}`);
+          } else {
+            await supabase.from('api_keys').update({
+              status: 'failed',
+              last_failed: new Date().toISOString(),
+              failure_count: currentKey.failure_count + 1
+            }).eq('id', currentKey.id);
+            console.log(`⚠️ Marked API key as failed: ${currentKey.key_name}`);
+          }
+
+          attempts++;
+          currentKeyIndex++;
+        }
+      }
+
+      if (!success) {
+        // If all keys failed for this domain, add a failure result
+        const errorResult = {
+          domain: domain,
+          api_key_used: null,
+          error: 'All API keys failed or rate limited',
+          email_found: false,
+          total_contacts: 0
+        };
+        
+        console.log(`❌ Adding error result for ${domain}:`, errorResult);
+        results.push(errorResult);
+      }
+    }
+
+    const processingTime = Date.now() - startTime;
+
+    // Update the log with results
+    await supabase.from('analysis_logs').update({
+      status: 'completed',
+      results: results,
+      api_keys_used: usedKeys,
+      processing_time: processingTime
+    }).eq('request_id', requestId);
+
+    // Create tab-separated output for Google Sheets
+    const sheetsOutput = results.map(result => {
+      const flatResult = {
+        request_id: requestId,
+        domains_processed: domains.length,
+        processing_time: processingTime,
+        domain: result.domain,
+        api_key_used: result.api_key_used,
+        page_scraped: result.page_scraped,
+        email_found: result.email_found,
+        total_contacts: result.total_contacts,
+        emails: result.emails?.join(', ') || 'No emails found',
+        phones: result.phones?.join(', ') || 'No phones found',
+        linkedin: result.linkedIns?.join(', ') || 'No LinkedIn found',
+        instagram: result.instagrams?.join(', ') || 'No Instagram found',
+        facebook: result.facebooks?.join(', ') || 'No Facebook found',
+        twitter: result.twitters?.join(', ') || 'No Twitter found',
+        youtube: result.youtubes?.join(', ') || 'No YouTube found',
+        tiktok: result.tiktoks?.join(', ') || 'No TikTok found',
+        pinterest: result.pinterests?.join(', ') || 'No Pinterest found',
+        discord: result.discords?.join(', ') || 'No Discord found',
+        telegram: result.telegrams?.join(', ') || 'No Telegram found',
+        error: result.error || null
+      };
+
+      // Convert to tab-separated string
+      const fields = [
+        'request_id', 'domains_processed', 'processing_time', 'domain', 'api_key_used',
+        'page_scraped', 'email_found', 'total_contacts', 'emails', 'phones',
+        'linkedin', 'instagram', 'facebook', 'twitter', 'youtube', 'tiktok',
+        'pinterest', 'discord', 'telegram', 'error'
+      ];
+
+      return fields.map(field => flatResult[field]).join('\t');
+    });
+
+    // Set content type to plain text
+    res.setHeader('Content-Type', 'text/plain');
+    
+    if (results.length === 1) {
+      // Single domain - return one line
+      res.send(sheetsOutput[0]);
+    } else {
+      // Multiple domains - return multiple lines
+      res.send(sheetsOutput.join('\n'));
+    }
+
+  } catch (error) {
+    console.error('Contact extraction error:', error);
+    
+    const processingTime = Date.now() - startTime;
+    
+    // Update log with error
+    await supabase.from('analysis_logs').update({
+      status: 'failed',
+      error_message: error.message,
+      processing_time: processingTime
+    }).eq('request_id', requestId);
+
+    res.status(500).json({ 
+      error: 'Extraction failed', 
+      message: 'An error occurred during contact extraction' 
+    });
+  }
+});
+
 // Debug endpoint to check API keys (requires authentication)
 app.get('/api/debug/keys', authMiddleware, async (req, res) => {
   try {
