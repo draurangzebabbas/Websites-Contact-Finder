@@ -109,201 +109,250 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-// Contact Info Scraper API integration
-const callContactInfoScraper = async (domain, apiKey, pagePath = '') => {
-  console.log(`🔍 Scraping contact info for domain: ${domain}${pagePath} with API key: ${apiKey.substring(0, 8)}...`);
+// Function to call Apify Contact Info Scraper with smart page checking
+async function callContactInfoScraper(domain, apiKey, specificPath = '') {
+  const baseUrl = `https://${domain}`;
+  const url = specificPath ? `${baseUrl}${specificPath}` : baseUrl;
   
+  console.log(`🔍 Scraping: ${url}`);
+  
+  const input = {
+    considerChildFrames: false,
+    maxDepth: 0,
+    maxRequests: 1,
+    sameDomain: true,
+    startUrls: [
+      {
+        url: url,
+        method: "GET"
+      }
+    ],
+    useBrowser: true
+  };
+
   try {
-    // Construct the URL to scrape
-    const urlToScrape = `https://${domain}${pagePath}`;
-    console.log(`📡 Starting Contact Info Scraper for URL: ${urlToScrape}`);
-    
-    // Start the contact info scraper actor
-    const scraperResponse = await fetch('https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs', {
+    const response = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs?token=${apiKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
       },
-      body: JSON.stringify({
-        "considerChildFrames": false,
-        "maxDepth": 0,
-        "maxRequests": 1,
-        "sameDomain": true,
-        "startUrls": [
-          {
-            "url": urlToScrape,
-            "method": "GET"
-          }
-        ],
-        "useBrowser": true
-      })
+      body: JSON.stringify(input)
     });
 
-    console.log(`📊 Scraper Response Status: ${scraperResponse.status} ${scraperResponse.statusText}`);
-
-    if (!scraperResponse.ok) {
-      const errorText = await scraperResponse.text();
-      console.error(`❌ Contact Info Scraper API Error: ${errorText}`);
-      throw new Error(`Contact Info Scraper API failed: ${scraperResponse.status} ${scraperResponse.statusText}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ Apify API error for ${url}:`, errorText);
+      
+      if (response.status === 401) {
+        throw new Error('Invalid API key');
+      } else if (response.status === 429) {
+        throw new Error('Rate limited - please try again later');
+      } else if (response.status === 402) {
+        throw new Error('Insufficient credits');
+      } else {
+        throw new Error(`Apify API error: ${response.status} - ${errorText}`);
+      }
     }
 
-    // Get raw response text first
-    const scraperResponseText = await scraperResponse.text();
-    console.log(`📊 Raw scraper response length: ${scraperResponseText.length}`);
-    
-    if (!scraperResponseText || scraperResponseText.trim() === '') {
-      throw new Error('Empty response from Apify Contact Info Scraper API');
-    }
+    const runData = await response.json();
+    console.log(`✅ Apify run started for ${url}:`, runData.id);
 
-    let scraperRunData;
-    try {
-      scraperRunData = JSON.parse(scraperResponseText);
-    } catch (parseError) {
-      console.error(`❌ Scraper JSON parse error: ${parseError.message}`);
-      throw new Error(`Invalid JSON response from Apify Contact Info Scraper: ${parseError.message}`);
-    }
+    // Wait for completion
+    let dataset = null;
+    let attempts = 0;
+    const maxAttempts = 30; // 30 seconds timeout
 
-    const runId = scraperRunData.data?.id;
-    console.log(`📊 Scraper run ID: ${runId}`);
+    while (!dataset && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      attempts++;
 
-    if (!runId) {
-      console.error(`❌ No run ID found in scraper response:`, scraperRunData);
-      throw new Error('No run ID received from Apify Contact Info Scraper API');
-    }
+      try {
+        const statusResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs/${runData.id}?token=${apiKey}`);
+        const statusData = await statusResponse.json();
 
-    // Wait for scraper run to complete
-    console.log(`⏳ Waiting for scraper run to complete...`);
-    let scraperAttempts = 0;
-    const maxScraperAttempts = 60; // Wait up to 5 minutes
-
-    while (scraperAttempts < maxScraperAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
-      scraperAttempts++;
-
-      console.log(`📊 Checking scraper run status (attempt ${scraperAttempts}/${maxScraperAttempts})...`);
-      const statusResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs/${runId}`, {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`
+        if (statusData.status === 'SUCCEEDED') {
+          const datasetResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs/${runData.id}/dataset/items?token=${apiKey}`);
+          dataset = await datasetResponse.json();
+          console.log(`✅ Apify run completed for ${url}:`, dataset.length, 'items');
+        } else if (statusData.status === 'FAILED') {
+          throw new Error(`Apify run failed: ${statusData.meta?.errorMessage || 'Unknown error'}`);
         }
-      });
-
-      if (!statusResponse.ok) {
-        console.error(`❌ Scraper Status Error: ${statusResponse.status}`);
-        continue;
-      }
-
-      const statusData = await statusResponse.json();
-      console.log(`📊 Scraper run status: ${statusData.data?.status} (attempt ${scraperAttempts}/${maxScraperAttempts})`);
-
-      if (statusData.data?.status === 'SUCCEEDED') {
-        console.log(`✅ Scraper run completed successfully`);
-        break;
-      } else if (statusData.data?.status === 'FAILED') {
-        throw new Error(`Scraper run failed: ${statusData.data?.meta?.errorMessage || 'Unknown error'}`);
-      }
-    }
-
-    if (scraperAttempts >= maxScraperAttempts) {
-      throw new Error('Scraper run timed out after 5 minutes');
-    }
-
-    // Get dataset ID from completed run
-    const finalStatusResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs/${runId}`, {
-      headers: {
-        'Authorization': `Bearer ${apiKey}`
-      }
-    });
-
-    const finalStatusData = await finalStatusResponse.json();
-    const datasetId = finalStatusData.data?.defaultDatasetId;
-    console.log(`📊 Scraper dataset ID: ${datasetId}`);
-
-    if (!datasetId) {
-      console.error(`❌ No dataset ID found in completed scraper run:`, finalStatusData);
-      throw new Error('No dataset ID received from completed Apify Contact Info Scraper run');
-    }
-
-    // Wait for dataset to populate
-    console.log(`⏳ Initial wait for scraper dataset to populate...`);
-    await new Promise(resolve => setTimeout(resolve, 20000)); // Wait 20 seconds
-
-    // Poll dataset until we have results
-    console.log(`⏳ Polling scraper dataset for results...`);
-    let scraperData = null;
-    let datasetAttempts = 0;
-    const maxDatasetAttempts = 60; // Wait up to 5 minutes
-
-    while (datasetAttempts < maxDatasetAttempts) {
-      console.log(`📊 Checking scraper dataset (attempt ${datasetAttempts + 1}/${maxDatasetAttempts})...`);
-      const scraperResultsResponse = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items`, {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`
+      } catch (error) {
+        console.error(`❌ Error checking run status for ${url}:`, error.message);
+        if (attempts >= maxAttempts) {
+          throw error;
         }
-      });
-
-      if (!scraperResultsResponse.ok) {
-        console.error(`❌ Scraper Results Error: ${scraperResultsResponse.status}`);
-        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
-        datasetAttempts++;
-        continue;
       }
-
-      scraperData = await scraperResultsResponse.json();
-      console.log(`📊 Scraper dataset has ${scraperData.length} items`);
-
-      if (scraperData && scraperData.length > 0) {
-        console.log(`✅ Scraper results received: ${scraperData.length} items`);
-        break;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
-      datasetAttempts++;
     }
 
-    if (!scraperData || scraperData.length === 0) {
-      throw new Error('Scraper dataset is empty after 5 minutes of polling');
+    if (!dataset) {
+      throw new Error('Apify run timed out');
     }
 
-    console.log(`✅ Contact info data received for: ${domain}${pagePath}`);
-    console.log(`📊 Scraper data structure:`, Object.keys(scraperData[0] || {}));
-
-    // Extract contact information from the first result
-    const contactInfo = scraperData[0] || {};
+    // Process results
+    const result = dataset[0] || {};
     
     return {
+      page_scraped: url,
       domain: domain,
-      page_scraped: urlToScrape,
-      emails: contactInfo.emails || [],
-      phones: contactInfo.phones || [],
-      linkedIns: contactInfo.linkedIns || [],
-      twitters: contactInfo.twitters || [],
-      instagrams: contactInfo.instagrams || [],
-      facebooks: contactInfo.facebooks || [],
-      youtubes: contactInfo.youtubes || [],
-      tiktoks: contactInfo.tiktoks || [],
-      pinterests: contactInfo.pinterests || [],
-      discords: contactInfo.discords || [],
-      snapchats: contactInfo.snapchats || [],
-      threads: contactInfo.threads || [],
-      telegrams: contactInfo.telegrams || []
+      emails: result.emails || [],
+      phones: result.phones || [],
+      linkedIns: result.linkedIns || [],
+      twitters: result.twitters || [],
+      instagrams: result.instagrams || [],
+      facebooks: result.facebooks || [],
+      youtubes: result.youtubes || [],
+      tiktoks: result.tiktoks || [],
+      pinterests: result.pinterests || [],
+      discords: result.discords || [],
+      snapchats: result.snapchats || [],
+      threads: result.threads || [],
+      telegrams: result.telegrams || []
     };
 
   } catch (error) {
-    console.error(`❌ Contact Info Scraper API error for ${domain}:`, error.message);
-    
-    // Provide more specific error messages
-    if (error.message.includes('401')) {
-      throw new Error('Invalid API key - please check your Apify API key');
-    } else if (error.message.includes('429')) {
-      throw new Error('Rate limit exceeded - API key may be out of credits');
-    } else if (error.message.includes('404')) {
-      throw new Error('Apify actor not found - please check actor configuration');
-    } else {
-      throw new Error(`Contact Info Scraper API error: ${error.message}`);
-    }
+    console.error(`❌ Error scraping ${url}:`, error.message);
+    throw error;
   }
-};
+}
+
+// Enhanced function to call Contact Info Scraper with data aggregation
+async function callContactInfoScraperWithAggregation(domain, apiKey) {
+  console.log(`🔍 Starting smart page checking for ${domain}`);
+  
+  // Initialize aggregated data
+  let aggregatedData = {
+    page_scraped: `https://${domain}`,
+    domain: domain,
+    emails: [],
+    phones: [],
+    linkedIns: [],
+    twitters: [],
+    instagrams: [],
+    facebooks: [],
+    youtubes: [],
+    tiktoks: [],
+    pinterests: [],
+    discords: [],
+    snapchats: [],
+    threads: [],
+    telegrams: []
+  };
+
+  // Step 1: Check main domain
+  try {
+    console.log(`📄 Checking main page: ${domain}`);
+    const mainPageData = await callContactInfoScraper(domain, apiKey);
+    
+    // Aggregate data from main page
+    aggregatedData.emails = [...new Set([...aggregatedData.emails, ...mainPageData.emails])];
+    aggregatedData.phones = [...new Set([...aggregatedData.phones, ...mainPageData.phones])];
+    aggregatedData.linkedIns = [...new Set([...aggregatedData.linkedIns, ...mainPageData.linkedIns])];
+    aggregatedData.twitters = [...new Set([...aggregatedData.twitters, ...mainPageData.twitters])];
+    aggregatedData.instagrams = [...new Set([...aggregatedData.instagrams, ...mainPageData.instagrams])];
+    aggregatedData.facebooks = [...new Set([...aggregatedData.facebooks, ...mainPageData.facebooks])];
+    aggregatedData.youtubes = [...new Set([...aggregatedData.youtubes, ...mainPageData.youtubes])];
+    aggregatedData.tiktoks = [...new Set([...aggregatedData.tiktoks, ...mainPageData.tiktoks])];
+    aggregatedData.pinterests = [...new Set([...aggregatedData.pinterests, ...mainPageData.pinterests])];
+    aggregatedData.discords = [...new Set([...aggregatedData.discords, ...mainPageData.discords])];
+    aggregatedData.snapchats = [...new Set([...aggregatedData.snapchats, ...mainPageData.snapchats])];
+    aggregatedData.threads = [...new Set([...aggregatedData.threads, ...mainPageData.threads])];
+    aggregatedData.telegrams = [...new Set([...aggregatedData.telegrams, ...mainPageData.telegrams])];
+    
+    console.log(`✅ Main page data aggregated for ${domain}:`, {
+      emails: aggregatedData.emails.length,
+      phones: aggregatedData.phones.length,
+      social_media: aggregatedData.linkedIns.length + aggregatedData.facebooks.length + aggregatedData.twitters.length
+    });
+    
+    // If we found emails on main page, we're done!
+    if (aggregatedData.emails.length > 0) {
+      console.log(`📧 Emails found on main page for ${domain}, stopping here`);
+      return aggregatedData;
+    }
+  } catch (error) {
+    console.error(`❌ Error scraping main page for ${domain}:`, error.message);
+  }
+
+  // Step 2: Check /contact page if no emails found
+  try {
+    console.log(`📄 Checking /contact page: ${domain}/contact`);
+    const contactPageData = await callContactInfoScraper(domain, apiKey, '/contact');
+    
+    // Update page_scraped to show we checked multiple pages
+    aggregatedData.page_scraped = `https://${domain} (main + /contact)`;
+    
+    // Aggregate data from contact page
+    aggregatedData.emails = [...new Set([...aggregatedData.emails, ...contactPageData.emails])];
+    aggregatedData.phones = [...new Set([...aggregatedData.phones, ...contactPageData.phones])];
+    aggregatedData.linkedIns = [...new Set([...aggregatedData.linkedIns, ...contactPageData.linkedIns])];
+    aggregatedData.twitters = [...new Set([...aggregatedData.twitters, ...contactPageData.twitters])];
+    aggregatedData.instagrams = [...new Set([...aggregatedData.instagrams, ...contactPageData.instagrams])];
+    aggregatedData.facebooks = [...new Set([...aggregatedData.facebooks, ...contactPageData.facebooks])];
+    aggregatedData.youtubes = [...new Set([...aggregatedData.youtubes, ...contactPageData.youtubes])];
+    aggregatedData.tiktoks = [...new Set([...aggregatedData.tiktoks, ...contactPageData.tiktoks])];
+    aggregatedData.pinterests = [...new Set([...aggregatedData.pinterests, ...contactPageData.pinterests])];
+    aggregatedData.discords = [...new Set([...aggregatedData.discords, ...contactPageData.discords])];
+    aggregatedData.snapchats = [...new Set([...aggregatedData.snapchats, ...contactPageData.snapchats])];
+    aggregatedData.threads = [...new Set([...aggregatedData.threads, ...contactPageData.threads])];
+    aggregatedData.telegrams = [...new Set([...aggregatedData.telegrams, ...contactPageData.telegrams])];
+    
+    console.log(`✅ /contact page data aggregated for ${domain}:`, {
+      emails: aggregatedData.emails.length,
+      phones: aggregatedData.phones.length,
+      social_media: aggregatedData.linkedIns.length + aggregatedData.facebooks.length + aggregatedData.twitters.length
+    });
+    
+    // If we found emails on contact page, we're done!
+    if (aggregatedData.emails.length > 0) {
+      console.log(`📧 Emails found on /contact page for ${domain}, stopping here`);
+      return aggregatedData;
+    }
+  } catch (error) {
+    console.error(`❌ Error scraping /contact page for ${domain}:`, error.message);
+  }
+
+  // Step 3: Check /contact-us page if still no emails found
+  try {
+    console.log(`📄 Checking /contact-us page: ${domain}/contact-us`);
+    const contactUsPageData = await callContactInfoScraper(domain, apiKey, '/contact-us');
+    
+    // Update page_scraped to show we checked all pages
+    aggregatedData.page_scraped = `https://${domain} (main + /contact + /contact-us)`;
+    
+    // Aggregate data from contact-us page
+    aggregatedData.emails = [...new Set([...aggregatedData.emails, ...contactUsPageData.emails])];
+    aggregatedData.phones = [...new Set([...aggregatedData.phones, ...contactUsPageData.phones])];
+    aggregatedData.linkedIns = [...new Set([...aggregatedData.linkedIns, ...contactUsPageData.linkedIns])];
+    aggregatedData.twitters = [...new Set([...aggregatedData.twitters, ...contactUsPageData.twitters])];
+    aggregatedData.instagrams = [...new Set([...aggregatedData.instagrams, ...contactUsPageData.instagrams])];
+    aggregatedData.facebooks = [...new Set([...aggregatedData.facebooks, ...contactUsPageData.facebooks])];
+    aggregatedData.youtubes = [...new Set([...aggregatedData.youtubes, ...contactUsPageData.youtubes])];
+    aggregatedData.tiktoks = [...new Set([...aggregatedData.tiktoks, ...contactUsPageData.tiktoks])];
+    aggregatedData.pinterests = [...new Set([...aggregatedData.pinterests, ...contactUsPageData.pinterests])];
+    aggregatedData.discords = [...new Set([...aggregatedData.discords, ...contactUsPageData.discords])];
+    aggregatedData.snapchats = [...new Set([...aggregatedData.snapchats, ...contactUsPageData.snapchats])];
+    aggregatedData.threads = [...new Set([...aggregatedData.threads, ...contactUsPageData.threads])];
+    aggregatedData.telegrams = [...new Set([...aggregatedData.telegrams, ...contactUsPageData.telegrams])];
+    
+    console.log(`✅ /contact-us page data aggregated for ${domain}:`, {
+      emails: aggregatedData.emails.length,
+      phones: aggregatedData.phones.length,
+      social_media: aggregatedData.linkedIns.length + aggregatedData.facebooks.length + aggregatedData.twitters.length
+    });
+  } catch (error) {
+    console.error(`❌ Error scraping /contact-us page for ${domain}:`, error.message);
+  }
+
+  console.log(`🎯 Final aggregated data for ${domain}:`, {
+    emails: aggregatedData.emails.length,
+    phones: aggregatedData.phones.length,
+    social_media: aggregatedData.linkedIns.length + aggregatedData.facebooks.length + aggregatedData.twitters.length,
+    pages_checked: aggregatedData.page_scraped
+  });
+
+  return aggregatedData;
+}
 
 // Main contact info extraction endpoint
 app.post('/api/extract-contacts', rateLimitMiddleware, authMiddleware, async (req, res) => {
@@ -373,20 +422,8 @@ app.post('/api/extract-contacts', rateLimitMiddleware, authMiddleware, async (re
         
         try {
           // Try main domain first
-          let contactResult = await callContactInfoScraper(domain, currentKey.api_key);
+          let contactResult = await callContactInfoScraperWithAggregation(domain, currentKey.api_key);
           
-          // If no emails found, try /contact
-          if (contactResult.emails.length === 0) {
-            console.log(`📧 No emails found on main page, trying /contact for ${domain}`);
-            contactResult = await callContactInfoScraper(domain, currentKey.api_key, '/contact');
-          }
-          
-          // If still no emails found, try /contact-us
-          if (contactResult.emails.length === 0) {
-            console.log(`📧 No emails found on /contact, trying /contact-us for ${domain}`);
-            contactResult = await callContactInfoScraper(domain, currentKey.api_key, '/contact-us');
-          }
-
           const result = {
             domain: domain,
             api_key_used: currentKey.key_name,
@@ -619,7 +656,7 @@ app.post('/api/test-webhook', authMiddleware, async (req, res) => {
     
     // Test with first domain
     const testDomain = domains[0] || "example.com";
-    const testResult = await callContactInfoScraper(testDomain, testKey.api_key);
+    const testResult = await callContactInfoScraperWithAggregation(testDomain, testKey.api_key);
     
     res.json({
       success: true,
@@ -714,20 +751,8 @@ app.post('/api/extract-contacts-sheets', rateLimitMiddleware, authMiddleware, as
         
         try {
           // Try main domain first
-          let contactResult = await callContactInfoScraper(domain, currentKey.api_key);
+          let contactResult = await callContactInfoScraperWithAggregation(domain, currentKey.api_key);
           
-          // If no emails found, try /contact
-          if (contactResult.emails.length === 0) {
-            console.log(`📧 No emails found on main page, trying /contact for ${domain}`);
-            contactResult = await callContactInfoScraper(domain, currentKey.api_key, '/contact');
-          }
-          
-          // If still no emails found, try /contact-us
-          if (contactResult.emails.length === 0) {
-            console.log(`📧 No emails found on /contact, trying /contact-us for ${domain}`);
-            contactResult = await callContactInfoScraper(domain, currentKey.api_key, '/contact-us');
-          }
-
           const result = {
             domain: domain,
             api_key_used: currentKey.key_name,
