@@ -17,7 +17,10 @@ Authorization: Bearer YOUR_WEBHOOK_TOKEN
 ## Endpoints
 
 ### POST /api/extract-contacts
-Extract contact information from a list of domains.
+Extract contact information from a list of domains and return in JSON format.
+
+### POST /api/extract-contacts-sheets
+Extract contact information from a list of domains and return in tab-separated format perfect for Google Sheets.
 
 **Request Body:**
 ```json
@@ -30,34 +33,108 @@ Extract contact information from a list of domains.
 }
 ```
 
-**Response Format (Flat JSON for Google Sheets):**
+**Response Format (Completely Flat JSON for Make.com):**
+
+**Single Domain Response:**
 ```json
 {
   "request_id": "uuid-string",
-  "domains_processed": 3,
+  "domains_processed": 1,
   "processing_time": 45000,
-  "results": [
-    {
-      "domain": "example.com",
-      "api_key_used": "Key 1",
-      "page_scraped": "https://example.com/contact",
-      "email_found": true,
-      "total_contacts": 5,
-      "emails": "contact@example.com, info@example.com",
-      "phones": "+1-555-123-4567, (555) 123-4567",
-      "linkedin": "https://linkedin.com/company/example",
-      "instagram": "https://instagram.com/example",
-      "facebook": "https://facebook.com/example",
-      "twitter": "https://twitter.com/example",
-      "youtube": "https://youtube.com/example",
-      "tiktok": "No TikTok found",
-      "pinterest": "No Pinterest found",
-      "discord": "No Discord found",
-      "telegram": "No Telegram found",
-      "error": null
-    }
+  "domain": "example.com",
+  "api_key_used": "Key 1",
+  "page_scraped": "https://example.com/contact",
+  "email_found": true,
+  "total_contacts": 5,
+  "emails": "contact@example.com, info@example.com",
+  "phones": "+1-555-123-4567, (555) 123-4567",
+  "linkedin": "https://linkedin.com/company/example",
+  "instagram": "https://instagram.com/example",
+  "facebook": "https://facebook.com/example",
+  "twitter": "https://twitter.com/example",
+  "youtube": "https://youtube.com/example",
+  "tiktok": "No TikTok found",
+  "pinterest": "No Pinterest found",
+  "discord": "No Discord found",
+  "telegram": "No Telegram found",
+  "error": null
+}
+```
+
+**Multiple Domains Response (Array of Flat Objects):**
+```json
+[
+  {
+    "request_id": "uuid-string",
+    "domains_processed": 2,
+    "processing_time": 45000,
+    "domain": "example.com",
+    "api_key_used": "Key 1",
+    "page_scraped": "https://example.com/contact",
+    "email_found": true,
+    "total_contacts": 5,
+    "emails": "contact@example.com, info@example.com",
+    "phones": "+1-555-123-4567, (555) 123-4567",
+    "linkedin": "https://linkedin.com/company/example",
+    "instagram": "https://instagram.com/example",
+    "facebook": "https://facebook.com/example",
+    "twitter": "https://twitter.com/example",
+    "youtube": "https://youtube.com/example",
+    "tiktok": "No TikTok found",
+    "pinterest": "No Pinterest found",
+    "discord": "No Discord found",
+    "telegram": "No Telegram found",
+    "error": null
+  },
+  {
+    "request_id": "uuid-string",
+    "domains_processed": 2,
+    "processing_time": 45000,
+    "domain": "test-site.org",
+    "api_key_used": "Key 2",
+    "page_scraped": "https://test-site.org",
+    "email_found": false,
+    "total_contacts": 0,
+    "emails": "No emails found",
+    "phones": "No phones found",
+    "linkedin": "No LinkedIn found",
+    "instagram": "No Instagram found",
+    "facebook": "No Facebook found",
+    "twitter": "No Twitter found",
+    "youtube": "No YouTube found",
+    "tiktok": "No TikTok found",
+    "pinterest": "No Pinterest found",
+    "discord": "No Discord found",
+    "telegram": "No Telegram found",
+    "error": null
+  }
+]
+```
+
+### POST /api/extract-contacts-sheets
+Extract contact information and return in **tab-separated format** perfect for Google Sheets.
+
+**Request Body:** (Same as above)
+```json
+{
+  "domains": [
+    "example.com",
+    "another-domain.com"
   ]
 }
+```
+
+**Response Format (Tab-Separated for Google Sheets):**
+
+**Single Domain Response:**
+```
+request_id	uuid-string	domains_processed	1	processing_time	45000	domain	example.com	api_key_used	Key 1	page_scraped	https://example.com (main + /contact)	email_found	true	total_contacts	5	emails	contact@example.com, info@example.com	phones	+1-555-123-4567, (555) 123-4567	linkedin	https://linkedin.com/company/example	instagram	https://instagram.com/example	facebook	https://facebook.com/example	twitter	https://twitter.com/example	youtube	https://youtube.com/example	tiktok	No TikTok found	pinterest	No Pinterest found	discord	No Discord found	telegram	No Telegram found	error	null
+```
+
+**Multiple Domains Response:**
+```
+request_id	uuid-string	domains_processed	2	processing_time	45000	domain	example.com	api_key_used	Key 1	page_scraped	https://example.com (main + /contact)	email_found	true	total_contacts	5	emails	contact@example.com, info@example.com	phones	+1-555-123-4567, (555) 123-4567	linkedin	https://linkedin.com/company/example	instagram	https://instagram.com/example	facebook	https://facebook.com/example	twitter	https://twitter.com/example	youtube	https://youtube.com/example	tiktok	No TikTok found	pinterest	No Pinterest found	discord	No Discord found	telegram	No Telegram found	error	null
+request_id	uuid-string	domains_processed	2	processing_time	45000	domain	test-site.org	api_key_used	Key 2	page_scraped	https://test-site.org	email_found	false	total_contacts	0	emails	No emails found	phones	No phones found	linkedin	No LinkedIn found	instagram	No Instagram found	facebook	No Facebook found	twitter	No Twitter found	youtube	No YouTube found	tiktok	No TikTok found	pinterest	No Pinterest found	discord	No Discord found	telegram	No Telegram found	error	null
 ```
 
 ## Field Descriptions
@@ -65,13 +142,10 @@ Extract contact information from a list of domains.
 ### Request Fields
 - **domains** (array, required): List of domain names to extract contact info from (max 30 domains)
 
-### Response Fields
+### Response Fields (Single Domain)
 - **request_id**: Unique identifier for this request
 - **domains_processed**: Number of domains processed
 - **processing_time**: Total processing time in milliseconds
-- **results**: Array of extraction results
-
-### Result Object Fields
 - **domain**: The domain that was processed
 - **api_key_used**: Name of the API key used for this extraction
 - **page_scraped**: The actual URL that was scraped (main page, /contact, or /contact-us)
@@ -90,22 +164,32 @@ Extract contact information from a list of domains.
 - **telegram**: Comma-separated list of Telegram URLs found
 - **error**: Error message if extraction failed (null if successful)
 
+### Response Fields (Multiple Domains)
+When processing multiple domains, the response is an array where each object contains all the fields listed above.
+
 ## Extraction Logic
 
-The API uses intelligent page checking to maximize email discovery:
+The API uses intelligent page checking with **data aggregation** to maximize contact discovery:
 
-1. **First**: Scrapes the main domain (e.g., `example.com`)
-2. **If no emails found**: Scrapes `/contact` page (e.g., `example.com/contact`)
-3. **If still no emails**: Scrapes `/contact-us` page (e.g., `example.com/contact-us`)
-4. **Stops immediately** when emails are found on any page
+1. **First**: Scrapes the main domain (e.g., `example.com`) and collects all contact data
+2. **If no emails found**: Scrapes `/contact` page (e.g., `example.com/contact`) and **combines** data with main page
+3. **If still no emails**: Scrapes `/contact-us` page (e.g., `example.com/contact-us`) and **combines** data from all pages
+4. **Stops immediately** when emails are found on any page, but **returns aggregated data** from all checked pages
 
-This ensures efficient API usage while maximizing contact discovery.
+### **Data Aggregation Example:**
+- **Main page**: Found Instagram, LinkedIn, phones, but NO email
+- **/contact page**: Found email, but NO Instagram/LinkedIn
+- **Result**: Returns email from `/contact` + Instagram/LinkedIn from main page
+
+This ensures you get the **maximum contact information** while still being efficient with API usage.
 
 ## Google Sheets Integration
 
-The flat JSON format is designed for easy integration with Make.com and Google Sheets:
+The completely flat JSON format is designed for easy integration with Make.com and Google Sheets:
 
 ### Make.com Setup
+
+**Option 1: JSON Format (`/api/extract-contacts`)**
 1. **HTTP Request Module**:
    - Method: `POST`
    - URL: `https://websites-contact-finder.onrender.com/api/extract-contacts`
@@ -113,14 +197,26 @@ The flat JSON format is designed for easy integration with Make.com and Google S
    - Body: JSON with domains array
 
 2. **Google Sheets Module**:
-   - Use the `results` array from the response
-   - Each result object maps to one row in Google Sheets
-   - Fields are already comma-separated for easy parsing
+   - For single domain: Use the response object directly
+   - For multiple domains: Use the response array (each item maps to one row)
+   - All fields are already comma-separated for easy parsing
+
+**Option 2: Tab-Separated Format (`/api/extract-contacts-sheets`) - Recommended for Google Sheets**
+1. **HTTP Request Module**:
+   - Method: `POST`
+   - URL: `https://websites-contact-finder.onrender.com/api/extract-contacts-sheets`
+   - Headers: `Authorization: Bearer YOUR_WEBHOOK_TOKEN`
+   - Body: JSON with domains array
+
+2. **Google Sheets Module**:
+   - Copy the tab-separated response directly
+   - Paste into Google Sheets - it will automatically separate into columns
+   - Perfect for direct copy-paste workflow
 
 ### Google Sheets Structure
-| A | B | C | D | E | F | G | H | I | J | K | L | M | N | O | P | Q |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| domain | api_key_used | page_scraped | email_found | total_contacts | emails | phones | linkedin | instagram | facebook | twitter | youtube | tiktok | pinterest | discord | telegram | error |
+| A | B | C | D | E | F | G | H | I | J | K | L | M | N | O | P | Q | R | S | T |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| request_id | domains_processed | processing_time | domain | api_key_used | page_scraped | email_found | total_contacts | emails | phones | linkedin | instagram | facebook | twitter | youtube | tiktok | pinterest | discord | telegram | error |
 
 ## Rate Limits
 - **10 requests per minute** per IP address
@@ -153,7 +249,9 @@ The flat JSON format is designed for easy integration with Make.com and Google S
 
 ## Example Usage
 
-### cURL Example
+### cURL Examples
+
+**JSON Format:**
 ```bash
 curl -X POST https://websites-contact-finder.onrender.com/api/extract-contacts \
   -H "Content-Type: application/json" \
@@ -163,7 +261,19 @@ curl -X POST https://websites-contact-finder.onrender.com/api/extract-contacts \
   }'
 ```
 
-### JavaScript Example
+**Tab-Separated Format (Google Sheets):**
+```bash
+curl -X POST https://websites-contact-finder.onrender.com/api/extract-contacts-sheets \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_WEBHOOK_TOKEN" \
+  -d '{
+    "domains": ["example.com", "test-site.org"]
+  }'
+```
+
+### JavaScript Examples
+
+**JSON Format:**
 ```javascript
 const response = await fetch('https://websites-contact-finder.onrender.com/api/extract-contacts', {
   method: 'POST',
@@ -177,7 +287,24 @@ const response = await fetch('https://websites-contact-finder.onrender.com/api/e
 });
 
 const data = await response.json();
-console.log(data.results);
+console.log(data); // Flat object(s) for JSON processing
+```
+
+**Tab-Separated Format (Google Sheets):**
+```javascript
+const response = await fetch('https://websites-contact-finder.onrender.com/api/extract-contacts-sheets', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer YOUR_WEBHOOK_TOKEN'
+  },
+  body: JSON.stringify({
+    domains: ['example.com', 'test-site.org']
+  })
+});
+
+const data = await response.text();
+console.log(data); // Tab-separated string ready for Google Sheets
 ```
 
 ## Testing
@@ -193,4 +320,4 @@ GET https://websites-contact-finder.onrender.com/api/test
 ```
 
 ## Support
-For issues or questions, check the application dashboard or contact support through the web interface. 
+For issues or questions, check the application dashboard or contact support through the web interface.
