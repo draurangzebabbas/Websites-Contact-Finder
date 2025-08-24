@@ -1,4 +1,3 @@
-//Sync Added
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -110,7 +109,7 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-// Enhanced function to call Apify Contact Info Scraper with fallback to sync endpoint
+// Enhanced function to call Apify Contact Info Scraper with multiple fallbacks
 async function callContactInfoScraper(domain, apiKey, specificPath = '') {
   const baseUrl = `https://${domain}`;
   const url = specificPath ? `${baseUrl}${specificPath}` : baseUrl;
@@ -131,52 +130,109 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
     useBrowser: true
   };
 
-  try {
-    // First try the faster sync endpoint
-    console.log(`🚀 Trying fast sync endpoint for ${url}`);
-    
-    const syncResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/run-sync?token=${apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(input)
-    });
-
-    if (syncResponse.ok) {
-      const syncData = await syncResponse.json();
-      console.log(`✅ Fast sync endpoint successful for ${url}:`, syncData.length, 'items');
-      
-      // Process results
-      const result = syncData[0] || {};
-      
-      return {
-        page_scraped: url,
-        domain: domain,
-        emails: result.emails || [],
-        phones: result.phones || [],
-        linkedIns: result.linkedIns || [],
-        twitters: result.twitters || [],
-        instagrams: result.instagrams || [],
-        facebooks: result.facebooks || [],
-        youtubes: result.youtubes || [],
-        tiktoks: result.tiktoks || [],
-        pinterests: result.pinterests || [],
-        discords: result.discords || [],
-        snapchats: result.snapchats || [],
-        threads: result.threads || [],
-        telegrams: result.telegrams || []
-      };
-    } else {
-      console.log(`⚠️ Sync endpoint failed (${syncResponse.status}), falling back to async endpoint`);
+  // Try multiple Apify actions for better reliability
+  const apifyActions = [
+    {
+      name: 'Contact Info Scraper',
+      url: 'https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/run-sync',
+      fallback: 'https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs'
+    },
+    {
+      name: 'Web Scraper',
+      url: 'https://api.apify.com/v2/acts/apify~web-scraper/run-sync',
+      fallback: 'https://api.apify.com/v2/acts/apify~web-scraper/runs'
     }
-  } catch (error) {
-    console.log(`⚠️ Sync endpoint error, falling back to async endpoint:`, error.message);
+  ];
+
+  for (const action of apifyActions) {
+    try {
+      console.log(`🚀 Trying ${action.name} sync endpoint for ${url}`);
+      
+      let syncSuccess = false;
+      let syncAttempts = 0;
+      const maxSyncAttempts = 2; // Reduced attempts per action
+      
+      while (!syncSuccess && syncAttempts < maxSyncAttempts) {
+        try {
+          syncAttempts++;
+          console.log(`🔄 ${action.name} sync attempt ${syncAttempts}/${maxSyncAttempts} for ${url}`);
+          
+          const syncResponse = await fetch(`${action.url}?token=${apiKey}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(input),
+            // Add timeout to prevent hanging
+            signal: AbortSignal.timeout(30000) // 30 second timeout
+          });
+
+          if (syncResponse.ok) {
+            const responseText = await syncResponse.text();
+            
+            // Validate JSON response
+            if (!responseText || responseText.trim() === '') {
+              throw new Error('Empty response from sync endpoint');
+            }
+            
+            let syncData;
+            try {
+              syncData = JSON.parse(responseText);
+            } catch (parseError) {
+              throw new Error(`Invalid JSON response: ${parseError.message}`);
+            }
+            
+            if (!Array.isArray(syncData) || syncData.length === 0) {
+              throw new Error('Empty or invalid data structure from sync endpoint');
+            }
+            
+            console.log(`✅ ${action.name} sync endpoint successful for ${url}:`, syncData.length, 'items');
+            
+            // Process results
+            const result = syncData[0] || {};
+            
+            return {
+              page_scraped: url,
+              domain: domain,
+              emails: result.emails || [],
+              phones: result.phones || [],
+              linkedIns: result.linkedIns || [],
+              twitters: result.twitters || [],
+              instagrams: result.instagrams || [],
+              facebooks: result.facebooks || [],
+              youtubes: result.youtubes || [],
+              tiktoks: result.tiktoks || [],
+              pinterests: result.pinterests || [],
+              discords: result.discords || [],
+              snapchats: result.snapchats || [],
+              threads: result.threads || [],
+              telegrams: result.telegrams || []
+            };
+          } else {
+            const errorText = await syncResponse.text();
+            throw new Error(`${action.name} sync endpoint HTTP error: ${syncResponse.status} - ${errorText}`);
+          }
+        } catch (syncError) {
+          console.log(`⚠️ ${action.name} sync attempt ${syncAttempts} failed:`, syncError.message);
+          
+          if (syncAttempts >= maxSyncAttempts) {
+            console.log(`❌ All ${action.name} sync attempts failed, trying next action`);
+            break;
+          }
+          
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+    } catch (error) {
+      console.log(`⚠️ ${action.name} failed completely:`, error.message);
+      continue; // Try next action
+    }
   }
 
-  // Fallback to async endpoint if sync fails
+  // If all sync attempts fail, fallback to async endpoint
   try {
-    console.log(`🔄 Using async endpoint fallback for ${url}`);
+    console.log(`🔄 All sync endpoints failed, using async endpoint fallback for ${url}`);
     
     const response = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs?token=${apiKey}`, {
       method: 'POST',
