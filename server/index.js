@@ -1,3 +1,4 @@
+//Rotation Added
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -8,6 +9,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
+import fs from 'fs';
 
 // Load environment variables
 dotenv.config();
@@ -19,7 +21,6 @@ const __dirname = path.dirname(__filename);
 // Build frontend in production if dist doesn't exist
 if (process.env.NODE_ENV === 'production') {
   try {
-    const fs = require('fs');
     const distPath = path.join(__dirname, '../dist');
     
     if (!fs.existsSync(distPath)) {
@@ -244,6 +245,12 @@ async function callContactInfoScraperWithAggregation(domain, apiKey) {
     console.log(`📄 Checking main page: ${domain}`);
     const mainPageData = await callContactInfoScraper(domain, apiKey);
     
+    console.log(`📊 Main page raw data for ${domain}:`, {
+      emails: mainPageData.emails,
+      phones: mainPageData.phones,
+      page_scraped: mainPageData.page_scraped
+    });
+    
     // Aggregate data from main page
     aggregatedData.emails = [...new Set([...aggregatedData.emails, ...mainPageData.emails])];
     aggregatedData.phones = [...new Set([...aggregatedData.phones, ...mainPageData.phones])];
@@ -268,6 +275,7 @@ async function callContactInfoScraperWithAggregation(domain, apiKey) {
     // If we found emails on main page, we're done!
     if (aggregatedData.emails.length > 0) {
       console.log(`📧 Emails found on main page for ${domain}, stopping here`);
+      aggregatedData.page_scraped = `https://${domain}`;
       return aggregatedData;
     }
   } catch (error) {
@@ -278,6 +286,12 @@ async function callContactInfoScraperWithAggregation(domain, apiKey) {
   try {
     console.log(`📄 Checking /contact page: ${domain}/contact`);
     const contactPageData = await callContactInfoScraper(domain, apiKey, '/contact');
+    
+    console.log(`📊 /contact page raw data for ${domain}:`, {
+      emails: contactPageData.emails,
+      phones: contactPageData.phones,
+      page_scraped: contactPageData.page_scraped
+    });
     
     // Update page_scraped to show we checked multiple pages
     aggregatedData.page_scraped = `https://${domain} (main + /contact)`;
@@ -306,6 +320,7 @@ async function callContactInfoScraperWithAggregation(domain, apiKey) {
     // If we found emails on contact page, we're done!
     if (aggregatedData.emails.length > 0) {
       console.log(`📧 Emails found on /contact page for ${domain}, stopping here`);
+      aggregatedData.page_scraped = `https://${domain} (main + /contact)`;
       return aggregatedData;
     }
   } catch (error) {
@@ -316,6 +331,12 @@ async function callContactInfoScraperWithAggregation(domain, apiKey) {
   try {
     console.log(`📄 Checking /contact-us page: ${domain}/contact-us`);
     const contactUsPageData = await callContactInfoScraper(domain, apiKey, '/contact-us');
+    
+    console.log(`📊 /contact-us page raw data for ${domain}:`, {
+      emails: contactUsPageData.emails,
+      phones: contactUsPageData.phones,
+      page_scraped: contactUsPageData.page_scraped
+    });
     
     // Update page_scraped to show we checked all pages
     aggregatedData.page_scraped = `https://${domain} (main + /contact + /contact-us)`;
@@ -344,14 +365,188 @@ async function callContactInfoScraperWithAggregation(domain, apiKey) {
     console.error(`❌ Error scraping /contact-us page for ${domain}:`, error.message);
   }
 
-  console.log(`🎯 Final aggregated data for ${domain}:`, {
-    emails: aggregatedData.emails.length,
-    phones: aggregatedData.phones.length,
-    social_media: aggregatedData.linkedIns.length + aggregatedData.facebooks.length + aggregatedData.twitters.length,
-    pages_checked: aggregatedData.page_scraped
-  });
+      console.log(`🎯 Final aggregated data for ${domain}:`, {
+      emails: aggregatedData.emails.length,
+      phones: aggregatedData.phones.length,
+      social_media: aggregatedData.linkedIns.length + aggregatedData.facebooks.length + aggregatedData.twitters.length,
+      pages_checked: aggregatedData.page_scraped,
+      emails_data: aggregatedData.emails,
+      phones_data: aggregatedData.phones,
+      linkedins_data: aggregatedData.linkedIns
+    });
 
   return aggregatedData;
+}
+
+// Smart API key selection and management functions
+async function getSmartKeyAssignment(userId) {
+  console.log(`🔍 Getting smart key assignment for user ${userId}`);
+  
+  // First check and auto-reactivate any cooled down rate-limited keys
+  await checkAndReactivateKeys(userId);
+  
+  // Get all available keys with proper priority filtering
+  const { data: allKeys, error: keysError } = await supabase
+    .from('api_keys')
+    .select('*')
+    .eq('user_id', userId);
+
+  if (keysError || !allKeys || allKeys.length === 0) {
+    throw new Error('No API keys found for user');
+  }
+
+  console.log(`🔑 Found ${allKeys.length} total keys for user ${userId}`);
+
+  // Filter and prioritize keys
+  const availableKeys = allKeys.filter(key => {
+    // Only consider active and rate_limited keys
+    if (key.status === 'failed') {
+      console.log(`❌ Skipping failed key: ${key.key_name} (failure count: ${key.failure_count})`);
+      return false;
+    }
+    
+    // Check if rate_limited key has cooled down (15 minutes)
+    if (key.status === 'rate_limited' && key.last_failed) {
+      const cooldownPeriod = 15 * 60 * 1000; // 15 minutes in milliseconds
+      const timeSinceFailure = Date.now() - new Date(key.last_failed).getTime();
+      
+      if (timeSinceFailure < cooldownPeriod) {
+        console.log(`⏳ Rate limited key still cooling down: ${key.key_name} (${Math.round((cooldownPeriod - timeSinceFailure) / 1000 / 60)} minutes remaining)`);
+        return false;
+      } else {
+        // Auto-reactivate rate limited key
+        console.log(`🔄 Auto-reactivating cooled down key: ${key.key_name}`);
+        return true;
+      }
+    }
+    
+    return true;
+  });
+
+  if (availableKeys.length === 0) {
+    throw new Error('No API keys available (all are failed or still rate limited)');
+  }
+
+  console.log(`✅ Found ${availableKeys.length} available keys after filtering`);
+
+  // Calculate priority score for each key
+  const prioritizedKeys = availableKeys.map(key => {
+    let score = 0;
+    
+    // Status priority (lower = higher priority)
+    switch(key.status) {
+      case 'active': score += 1000; break;
+      case 'rate_limited': score += 2000; break;
+      default: score += 3000; break;
+    }
+    
+    // Time-based priority (older = higher priority)
+    const lastUsed = key.last_used ? new Date(key.last_used).getTime() : 0;
+    const hoursSinceLastUse = lastUsed > 0 ? (Date.now() - lastUsed) / (1000 * 60 * 60) : 24; // Default to 24 hours if never used
+    score += hoursSinceLastUse;
+    
+    // Failure count penalty
+    score += (key.failure_count * 100);
+    
+    console.log(`📊 Key ${key.key_name}: status=${key.status}, score=${score.toFixed(2)}, last_used=${key.last_used || 'never'}, failures=${key.failure_count}`);
+    
+    return { ...key, priorityScore: score };
+  });
+
+  // Sort by priority score (ascending = highest priority first)
+  prioritizedKeys.sort((a, b) => a.priorityScore - b.priorityScore);
+  
+  const selectedKey = prioritizedKeys[0];
+  console.log(`🎯 Selected key: ${selectedKey.key_name} (score: ${selectedKey.priorityScore.toFixed(2)})`);
+  
+  return selectedKey;
+}
+
+async function updateKeyStatus(keyId, status, errorMessage = null) {
+  try {
+    if (status === 'active') {
+      const { error } = await supabase
+        .from('api_keys')
+        .update({
+          status: status,
+          last_used: new Date().toISOString(),
+          failure_count: 0,
+          last_failed: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', keyId);
+
+      if (error) {
+        console.error(`❌ Failed to update key status to active:`, error);
+      } else {
+        console.log(`✅ Updated key ${keyId} status to: ${status}`);
+      }
+    } else if (status === 'rate_limited' || status === 'failed') {
+      // First get current failure count
+      const { data: currentKey, error: fetchError } = await supabase
+        .from('api_keys')
+        .select('failure_count')
+        .eq('id', keyId)
+        .single();
+
+      if (fetchError) {
+        console.error(`❌ Failed to fetch current failure count:`, fetchError);
+        return;
+      }
+
+      const newFailureCount = (currentKey.failure_count || 0) + 1;
+
+      const { error } = await supabase
+        .from('api_keys')
+        .update({
+          status: status,
+          last_failed: new Date().toISOString(),
+          failure_count: newFailureCount,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', keyId);
+
+      if (error) {
+        console.error(`❌ Failed to update key status to ${status}:`, error);
+      } else {
+        console.log(`✅ Updated key ${keyId} status to: ${status} (failure count: ${newFailureCount})`);
+      }
+    }
+  } catch (error) {
+    console.error(`❌ Error in updateKeyStatus:`, error);
+  }
+}
+
+// Function to check and auto-reactivate cooled down rate-limited keys
+async function checkAndReactivateKeys(userId) {
+  try {
+    const cooldownPeriod = 15 * 60 * 1000; // 15 minutes in milliseconds
+    const cutoffTime = new Date(Date.now() - cooldownPeriod).toISOString();
+    
+    // Find rate-limited keys that have cooled down
+    const { data: cooledKeys, error } = await supabase
+      .from('api_keys')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('status', 'rate_limited')
+      .lt('last_failed', cutoffTime);
+    
+    if (error) {
+      console.error(`❌ Error checking cooled keys:`, error);
+      return;
+    }
+    
+    if (cooledKeys && cooledKeys.length > 0) {
+      console.log(`🔄 Found ${cooledKeys.length} cooled down rate-limited keys for user ${userId}`);
+      
+      for (const key of cooledKeys) {
+        await updateKeyStatus(key.id, 'active');
+        console.log(`✅ Auto-reactivated cooled down key: ${key.key_name}`);
+      }
+    }
+  } catch (error) {
+    console.error(`❌ Error in checkAndReactivateKeys:`, error);
+  }
 }
 
 // Main contact info extraction endpoint
@@ -384,45 +579,57 @@ app.post('/api/extract-contacts', rateLimitMiddleware, authMiddleware, async (re
       status: 'pending'
     });
 
-    // Get user's API keys
-    const { data: apiKeys, error: keysError } = await supabase
-      .from('api_keys')
-      .select('*')
-      .eq('user_id', req.user.id)
-      .in('status', ['active', 'failed', 'rate_limited'])
-      .order('last_used', { ascending: true, nullsFirst: true });
-
-    if (keysError || !apiKeys || apiKeys.length === 0) {
+    // Get smart key assignment for this user
+    let currentKey;
+    try {
+      currentKey = await getSmartKeyAssignment(req.user.id);
+      console.log(`🔑 Smart key assignment successful: ${currentKey.key_name}`);
+    } catch (error) {
+      console.error(`❌ Smart key assignment failed:`, error.message);
+      
       await supabase.from('analysis_logs').update({
         status: 'failed',
-        error_message: 'No API keys available',
+        error_message: error.message,
         processing_time: Date.now() - startTime
       }).eq('request_id', requestId);
 
       return res.status(400).json({ 
-        error: 'No API keys', 
-        message: 'Please add at least one Apify API key' 
+        error: 'No API keys available', 
+        message: error.message 
       });
     }
 
-    console.log(`🔑 Found ${apiKeys.length} API keys for user ${req.user.id}`);
-
     const results = [];
     const usedKeys = [];
-    let currentKeyIndex = 0;
 
     // Process each domain
     for (const domain of domains) {
       let success = false;
       let attempts = 0;
-      const maxAttempts = Math.min(3, apiKeys.length);
+      const maxAttempts = 3; // Try up to 3 times with different keys if needed
 
       while (!success && attempts < maxAttempts) {
-        const currentKey = apiKeys[currentKeyIndex % apiKeys.length];
+        // Get a fresh key assignment for each attempt
+        try {
+          if (attempts > 0) {
+            currentKey = await getSmartKeyAssignment(req.user.id);
+            console.log(`🔄 Retry attempt ${attempts + 1} with key: ${currentKey.key_name}`);
+          }
+        } catch (error) {
+          console.error(`❌ Failed to get key for retry attempt ${attempts + 1}:`, error.message);
+          break;
+        }
         
         try {
           // Try main domain first
           let contactResult = await callContactInfoScraperWithAggregation(domain, currentKey.api_key);
+          
+          console.log(`📊 Raw contact result for ${domain}:`, {
+            domain: contactResult.domain,
+            emails: contactResult.emails,
+            phones: contactResult.phones,
+            page_scraped: contactResult.page_scraped
+          });
           
           const result = {
             domain: domain,
@@ -449,17 +656,14 @@ app.post('/api/extract-contacts', rateLimitMiddleware, authMiddleware, async (re
             domain: result.domain,
             api_key_used: result.api_key_used,
             email_found: result.email_found,
-            total_contacts: result.total_contacts
+            total_contacts: result.total_contacts,
+            emails: result.emails
           });
           
           results.push(result);
 
-          // Update key usage
-          await supabase.from('api_keys').update({
-            last_used: new Date().toISOString(),
-            failure_count: 0,
-            status: 'active'
-          }).eq('id', currentKey.id);
+          // Update key status to active (success)
+          await updateKeyStatus(currentKey.id, 'active');
 
           usedKeys.push(currentKey.id);
           success = true;
@@ -473,30 +677,17 @@ app.post('/api/extract-contacts', rateLimitMiddleware, authMiddleware, async (re
           const isInvalidKey = error.message.includes('Invalid API key') || error.message.includes('401');
           
           if (isRateLimit) {
-            await supabase.from('api_keys').update({
-              status: 'rate_limited',
-              last_failed: new Date().toISOString(),
-              failure_count: currentKey.failure_count + 1
-            }).eq('id', currentKey.id);
+            await updateKeyStatus(currentKey.id, 'rate_limited');
             console.log(`⚠️ Marked API key as rate limited: ${currentKey.key_name}`);
           } else if (isInvalidKey) {
-            await supabase.from('api_keys').update({
-              status: 'failed',
-              last_failed: new Date().toISOString(),
-              failure_count: currentKey.failure_count + 1
-            }).eq('id', currentKey.id);
+            await updateKeyStatus(currentKey.id, 'failed');
             console.log(`❌ Marked API key as failed: ${currentKey.key_name}`);
           } else {
-            await supabase.from('api_keys').update({
-              status: 'failed',
-              last_failed: new Date().toISOString(),
-              failure_count: currentKey.failure_count + 1
-            }).eq('id', currentKey.id);
+            await updateKeyStatus(currentKey.id, 'failed');
             console.log(`⚠️ Marked API key as failed: ${currentKey.key_name}`);
           }
 
           attempts++;
-          currentKeyIndex++;
         }
       }
 
@@ -526,7 +717,7 @@ app.post('/api/extract-contacts', rateLimitMiddleware, authMiddleware, async (re
     }).eq('request_id', requestId);
 
     const finalResults = results.map(result => {
-      // Create flat JSON structure for Google Sheets
+      // Create flat JSON structure for Make.com and Google Sheets
       return {
         domain: result.domain,
         api_key_used: result.api_key_used,
@@ -556,18 +747,29 @@ app.post('/api/extract-contacts', rateLimitMiddleware, authMiddleware, async (re
     console.log(`📊 Final response mapping:`, finalResults.map(r => ({
       domain: r.domain,
       api_key_used: r.api_key_used,
-      email_found: r.email_found
+      email_found: r.email_found,
+      emails: r.emails,
+      phones: r.phones,
+      linkedin: r.linkedin
     })));
     
-    // Return flat JSON without results array wrapper for Make.com
+    // Return flat JSON structure for Make.com
     if (finalResults.length === 1) {
-      // Single domain - return the result directly
-      res.json({
+      // Single domain - return the result directly with metadata
+      const singleResult = {
         request_id: requestId,
         domains_processed: domains.length,
         processing_time: processingTime,
         ...finalResults[0]  // Spread the result object directly
+      };
+      console.log(`📤 Returning single result:`, {
+        domain: singleResult.domain,
+        email_found: singleResult.email_found,
+        emails: singleResult.emails,
+        phones: singleResult.phones,
+        linkedin: singleResult.linkedin
       });
+      res.json(singleResult);
     } else {
       // Multiple domains - return array of flat objects
       const flatResults = finalResults.map(result => ({
@@ -576,6 +778,14 @@ app.post('/api/extract-contacts', rateLimitMiddleware, authMiddleware, async (re
         processing_time: processingTime,
         ...result  // Spread each result object
       }));
+      console.log(`📤 Returning multiple results:`, flatResults.length, 'domains');
+      console.log(`📤 Sample result:`, {
+        domain: flatResults[0]?.domain,
+        email_found: flatResults[0]?.email_found,
+        emails: flatResults[0]?.emails,
+        phones: flatResults[0]?.phones,
+        linkedin: flatResults[0]?.linkedin
+      });
       res.json(flatResults);
     }
 
@@ -920,7 +1130,7 @@ app.post('/api/extract-contacts-sheets', rateLimitMiddleware, authMiddleware, as
   }
 });
 
-// Debug endpoint to check API keys (requires authentication)
+// Enhanced debug endpoint to check API keys and system status
 app.get('/api/debug/keys', authMiddleware, async (req, res) => {
   try {
     const { data: apiKeys, error } = await supabase
@@ -933,21 +1143,95 @@ app.get('/api/debug/keys', authMiddleware, async (req, res) => {
     }
     
     console.log(`🔍 Debug: Found ${apiKeys.length} API keys for user ${req.user.id}`);
+    
+    // Analyze key statuses
+    const statusCounts = {
+      active: 0,
+      rate_limited: 0,
+      failed: 0
+    };
+    
+    const now = Date.now();
+    const cooldownPeriod = 15 * 60 * 1000; // 15 minutes
+    
     apiKeys.forEach((key, index) => {
+      statusCounts[key.status] = (statusCounts[key.status] || 0) + 1;
+      
       console.log(`  ${index + 1}. ID: ${key.id}, Name: "${key.key_name}", Status: ${key.status}`);
+      
+      if (key.status === 'rate_limited' && key.last_failed) {
+        const timeSinceFailure = now - new Date(key.last_failed).getTime();
+        const minutesRemaining = Math.max(0, Math.round((cooldownPeriod - timeSinceFailure) / 1000 / 60));
+        console.log(`     ⏳ Rate limited: ${minutesRemaining} minutes until auto-reactivation`);
+      }
+      
+      if (key.failure_count > 0) {
+        console.log(`     ❌ Failure count: ${key.failure_count}`);
+      }
     });
+    
+    // Check for potential issues
+    const issues = [];
+    
+    if (statusCounts.active === 0) {
+      issues.push('No active API keys available');
+    }
+    
+    if (statusCounts.failed > 0) {
+      issues.push(`${statusCounts.failed} failed API keys need manual reactivation`);
+    }
+    
+    if (statusCounts.rate_limited > 0) {
+      const cooledKeys = apiKeys.filter(key => 
+        key.status === 'rate_limited' && 
+        key.last_failed && 
+        (now - new Date(key.last_failed).getTime()) >= cooldownPeriod
+      );
+      
+      if (cooledKeys.length > 0) {
+        issues.push(`${cooledKeys.length} rate-limited keys are ready for auto-reactivation`);
+      } else {
+        issues.push(`${statusCounts.rate_limited} rate-limited keys are still cooling down`);
+      }
+    }
+    
+    // Test smart key assignment
+    let smartKeyTest = null;
+    try {
+      const testKey = await getSmartKeyAssignment(req.user.id);
+      smartKeyTest = {
+        success: true,
+        selected_key: testKey.key_name,
+        status: testKey.status,
+        message: 'Smart key assignment working correctly'
+      };
+    } catch (error) {
+      smartKeyTest = {
+        success: false,
+        error: error.message,
+        message: 'Smart key assignment failed'
+      };
+    }
     
     res.json({
       user_id: req.user.id,
       total_keys: apiKeys.length,
+      status_summary: statusCounts,
+      issues: issues,
+      smart_key_test: smartKeyTest,
       keys: apiKeys.map(key => ({
         id: key.id,
         name: key.key_name,
         status: key.status,
         provider: key.provider,
         last_used: key.last_used,
+        last_failed: key.last_failed,
         failure_count: key.failure_count,
-        created_at: key.created_at
+        created_at: key.created_at,
+        cooldown_status: key.status === 'rate_limited' && key.last_failed ? {
+          time_since_failure: Math.round((now - new Date(key.last_failed).getTime()) / 1000 / 60),
+          minutes_until_reactivation: Math.max(0, Math.round((cooldownPeriod - (now - new Date(key.last_failed).getTime())) / 1000 / 60))
+        } : null
       }))
     });
   } catch (error) {
@@ -955,6 +1239,131 @@ app.get('/api/debug/keys', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
+
+// Bulk key status check endpoint
+app.get('/api/keys/status', authMiddleware, async (req, res) => {
+  try {
+    const { data: apiKeys, error } = await supabase
+      .from('api_keys')
+      .select('*')
+      .eq('user_id', req.user.id);
+    
+    if (error) {
+      return res.status(500).json({ error: 'Database error', details: error });
+    }
+    
+    const now = Date.now();
+    const cooldownPeriod = 15 * 60 * 1000; // 15 minutes
+    
+    // Analyze and categorize keys
+    const keyAnalysis = {
+      total: apiKeys.length,
+      active: [],
+      rate_limited: [],
+      failed: [],
+      ready_for_reactivation: [],
+      issues: []
+    };
+    
+    apiKeys.forEach(key => {
+      const keyInfo = {
+        id: key.id,
+        name: key.key_name,
+        status: key.status,
+        provider: key.provider,
+        last_used: key.last_used,
+        last_failed: key.last_failed,
+        failure_count: key.failure_count,
+        created_at: key.created_at
+      };
+      
+      switch (key.status) {
+        case 'active':
+          keyAnalysis.active.push(keyInfo);
+          break;
+          
+        case 'rate_limited':
+          keyInfo.cooldown_status = key.last_failed ? {
+            time_since_failure: Math.round((now - new Date(key.last_failed).getTime()) / 1000 / 60),
+            minutes_until_reactivation: Math.max(0, Math.round((cooldownPeriod - (now - new Date(key.last_failed).getTime())) / 1000 / 60))
+          } : null;
+          
+          keyAnalysis.rate_limited.push(keyInfo);
+          
+          // Check if ready for auto-reactivation
+          if (key.last_failed && (now - new Date(key.last_failed).getTime()) >= cooldownPeriod) {
+            keyAnalysis.ready_for_reactivation.push(keyInfo);
+          }
+          break;
+          
+        case 'failed':
+          keyAnalysis.failed.push(keyInfo);
+          break;
+      }
+    });
+    
+    // Identify issues
+    if (keyAnalysis.active.length === 0) {
+      keyAnalysis.issues.push('No active API keys available');
+    }
+    
+    if (keyAnalysis.failed.length > 0) {
+      keyAnalysis.issues.push(`${keyAnalysis.failed.length} failed keys need manual reactivation`);
+    }
+    
+    if (keyAnalysis.rate_limited.length > 0 && keyAnalysis.ready_for_reactivation.length === 0) {
+      keyAnalysis.issues.push(`${keyAnalysis.rate_limited.length} rate-limited keys are still cooling down`);
+    }
+    
+    // Summary statistics
+    const summary = {
+      total_keys: keyAnalysis.total,
+      active_keys: keyAnalysis.active.length,
+      rate_limited_keys: keyAnalysis.rate_limited.length,
+      failed_keys: keyAnalysis.failed.length,
+      ready_for_reactivation: keyAnalysis.ready_for_reactivation.length,
+      system_health: keyAnalysis.active.length > 0 ? 'healthy' : 'critical'
+    };
+    
+    res.json({
+      user_id: req.user.id,
+      summary: summary,
+      analysis: keyAnalysis,
+      recommendations: generateRecommendations(keyAnalysis)
+    });
+    
+  } catch (error) {
+    console.error('Key status check error:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// Helper function to generate recommendations
+function generateRecommendations(keyAnalysis) {
+  const recommendations = [];
+  
+  if (keyAnalysis.active.length === 0) {
+    recommendations.push('Add new API keys or reactivate existing ones');
+  }
+  
+  if (keyAnalysis.failed.length > 0) {
+    recommendations.push(`Manually reactivate ${keyAnalysis.failed.length} failed keys`);
+  }
+  
+  if (keyAnalysis.ready_for_reactivation.length > 0) {
+    recommendations.push(`${keyAnalysis.ready_for_reactivation.length} rate-limited keys will auto-reactivate soon`);
+  }
+  
+  if (keyAnalysis.active.length < 2) {
+    recommendations.push('Consider adding more API keys for better redundancy');
+  }
+  
+  if (keyAnalysis.total === 0) {
+    recommendations.push('No API keys found. Please add your first Apify API key');
+  }
+  
+  return recommendations;
+}
 
 // Test Apify API key endpoint
 app.post('/api/test-apify', authMiddleware, async (req, res) => {
@@ -1006,6 +1415,54 @@ app.post('/api/test-apify', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error(`🧪 Test failed:`, error.message);
     res.status(500).json({ error: 'Test failed', details: error.message });
+  }
+});
+
+// Manual key reactivation endpoint
+app.post('/api/reactivate-key', authMiddleware, async (req, res) => {
+  try {
+    const { keyId } = req.body;
+    
+    if (!keyId) {
+      return res.status(400).json({ error: 'Key ID required' });
+    }
+    
+    // Get the key and verify ownership
+    const { data: key, error: fetchError } = await supabase
+      .from('api_keys')
+      .select('*')
+      .eq('id', keyId)
+      .eq('user_id', req.user.id)
+      .single();
+    
+    if (fetchError || !key) {
+      return res.status(404).json({ error: 'API key not found or access denied' });
+    }
+    
+    if (key.status === 'active') {
+      return res.status(400).json({ error: 'Key is already active' });
+    }
+    
+    // Reactivate the key
+    await updateKeyStatus(keyId, 'active');
+    
+    console.log(`✅ Manually reactivated key: ${key.key_name}`);
+    
+    res.json({
+      success: true,
+      message: `Key "${key.key_name}" reactivated successfully`,
+      key: {
+        id: key.id,
+        name: key.key_name,
+        status: 'active',
+        last_used: null,
+        failure_count: 0
+      }
+    });
+    
+  } catch (error) {
+    console.error('Key reactivation error:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
 
