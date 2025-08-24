@@ -109,17 +109,19 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-// Enhanced function to call Apify Contact Info Scraper with multiple fallbacks
+// Simplified function that matches Make.com's approach
 async function callContactInfoScraper(domain, apiKey, specificPath = '') {
   const baseUrl = `https://${domain}`;
   const url = specificPath ? `${baseUrl}${specificPath}` : baseUrl;
   
   console.log(`🔍 Scraping: ${url}`);
   
+  // Use the EXACT same input as Make.com
   const input = {
-    considerChildFrames: false,
+    considerChildFrames: true,           // Changed to match Make.com
     maxDepth: 0,
     maxRequests: 1,
+    maxRequestsPerStartUrl: 1,          // Added to match Make.com
     sameDomain: true,
     startUrls: [
       {
@@ -127,114 +129,14 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
         method: "GET"
       }
     ],
-    useBrowser: true
+    useBrowser: false                    // Changed to match Make.com
   };
 
-  // Try multiple Apify actions for better reliability
-  const apifyActions = [
-    {
-      name: 'Contact Info Scraper',
-      url: 'https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/run-sync',
-      fallback: 'https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs'
-    },
-    {
-      name: 'Web Scraper',
-      url: 'https://api.apify.com/v2/acts/apify~web-scraper/run-sync',
-      fallback: 'https://api.apify.com/v2/acts/apify~web-scraper/runs'
-    }
-  ];
-
-  for (const action of apifyActions) {
-    try {
-      console.log(`🚀 Trying ${action.name} sync endpoint for ${url}`);
-      
-      let syncSuccess = false;
-      let syncAttempts = 0;
-      const maxSyncAttempts = 2; // Reduced attempts per action
-      
-      while (!syncSuccess && syncAttempts < maxSyncAttempts) {
-        try {
-          syncAttempts++;
-          console.log(`🔄 ${action.name} sync attempt ${syncAttempts}/${maxSyncAttempts} for ${url}`);
-          
-          const syncResponse = await fetch(`${action.url}?token=${apiKey}`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(input),
-            // Add timeout to prevent hanging
-            signal: AbortSignal.timeout(30000) // 30 second timeout
-          });
-
-          if (syncResponse.ok) {
-            const responseText = await syncResponse.text();
-            
-            // Validate JSON response
-            if (!responseText || responseText.trim() === '') {
-              throw new Error('Empty response from sync endpoint');
-            }
-            
-            let syncData;
-            try {
-              syncData = JSON.parse(responseText);
-            } catch (parseError) {
-              throw new Error(`Invalid JSON response: ${parseError.message}`);
-            }
-            
-            if (!Array.isArray(syncData) || syncData.length === 0) {
-              throw new Error('Empty or invalid data structure from sync endpoint');
-            }
-            
-            console.log(`✅ ${action.name} sync endpoint successful for ${url}:`, syncData.length, 'items');
-            
-            // Process results
-            const result = syncData[0] || {};
-            
-            return {
-              page_scraped: url,
-              domain: domain,
-              emails: result.emails || [],
-              phones: result.phones || [],
-              linkedIns: result.linkedIns || [],
-              twitters: result.twitters || [],
-              instagrams: result.instagrams || [],
-              facebooks: result.facebooks || [],
-              youtubes: result.youtubes || [],
-              tiktoks: result.tiktoks || [],
-              pinterests: result.pinterests || [],
-              discords: result.discords || [],
-              snapchats: result.snapchats || [],
-              threads: result.threads || [],
-              telegrams: result.telegrams || []
-            };
-          } else {
-            const errorText = await syncResponse.text();
-            throw new Error(`${action.name} sync endpoint HTTP error: ${syncResponse.status} - ${errorText}`);
-          }
-        } catch (syncError) {
-          console.log(`⚠️ ${action.name} sync attempt ${syncAttempts} failed:`, syncError.message);
-          
-          if (syncAttempts >= maxSyncAttempts) {
-            console.log(`❌ All ${action.name} sync attempts failed, trying next action`);
-            break;
-          }
-          
-          // Wait before retry
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-      }
-    } catch (error) {
-      console.log(`⚠️ ${action.name} failed completely:`, error.message);
-      continue; // Try next action
-    }
-  }
-
-  // If all sync attempts fail, fallback to async endpoint
   try {
-    console.log(`🔄 All sync endpoints failed, using async endpoint fallback for ${url}`);
+    // Use the EXACT same Apify actor as Make.com
+    console.log(`🚀 Using Contact Details Scraper (vdrmota/contact-info-scraper) for ${url}`);
     
-    const response = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs?token=${apiKey}`, {
+    const syncResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/run-sync?token=${apiKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -242,78 +144,34 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
       body: JSON.stringify(input)
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`❌ Apify API error for ${url}:`, errorText);
+    if (syncResponse.ok) {
+      const syncData = await syncResponse.json();
+      console.log(`✅ Apify sync successful for ${url}:`, syncData.length, 'items');
       
-      if (response.status === 401) {
-        throw new Error('Invalid API key');
-      } else if (response.status === 429) {
-        throw new Error('Rate limited - please try again later');
-      } else if (response.status === 402) {
-        throw new Error('Insufficient credits');
-      } else {
-        throw new Error(`Apify API error: ${response.status} - ${errorText}`);
-      }
+      // Process results exactly like Make.com does
+      const result = syncData[0] || {};
+      
+      return {
+        page_scraped: url,
+        domain: domain,
+        emails: result.emails || [],
+        phones: result.phones || [],
+        linkedIns: result.linkedIns || [],
+        twitters: result.twitters || [],
+        instagrams: result.instagrams || [],
+        facebooks: result.facebooks || [],
+        youtubes: result.youtubes || [],
+        tiktoks: result.tiktoks || [],
+        pinterests: result.pinterests || [],
+        discords: result.discords || [],
+        snapchats: result.snapchats || [],
+        threads: result.threads || [],
+        telegrams: result.telegrams || []
+      };
+    } else {
+      const errorText = await syncResponse.text();
+      throw new Error(`Apify sync failed: ${syncResponse.status} - ${errorText}`);
     }
-
-    const runData = await response.json();
-    console.log(`✅ Apify run started for ${url}:`, runData.id);
-
-    // Wait for completion
-    let dataset = null;
-    let attempts = 0;
-    const maxAttempts = 120; // 120 seconds timeout (2 minutes) - increased for slow Apify responses
-
-    while (!dataset && attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Check every 2 seconds instead of 1
-      attempts++;
-
-      try {
-        const statusResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs/${runData.id}?token=${apiKey}`);
-        const statusData = await statusResponse.json();
-
-        if (statusData.status === 'SUCCEEDED') {
-          const datasetResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs/${runData.id}/dataset/items?token=${apiKey}`);
-          dataset = await datasetResponse.json();
-          console.log(`✅ Apify run completed for ${url}:`, dataset.length, 'items');
-        } else if (statusData.status === 'FAILED') {
-          throw new Error(`Apify run failed: ${statusData.meta?.errorMessage || 'Unknown error'}`);
-        } else if (statusData.status === 'RUNNING') {
-          console.log(`⏳ Apify run still running for ${url} (attempt ${attempts}/${maxAttempts})`);
-        }
-      } catch (error) {
-        console.error(`❌ Error checking run status for ${url}:`, error.message);
-        if (attempts >= maxAttempts) {
-          throw error;
-        }
-      }
-    }
-
-    if (!dataset) {
-      throw new Error(`Apify run timed out after ${maxAttempts * 2} seconds. The website might be slow or Apify servers are overloaded.`);
-    }
-
-    // Process results
-    const result = dataset[0] || {};
-    
-    return {
-      page_scraped: url,
-      domain: domain,
-      emails: result.emails || [],
-      phones: result.phones || [],
-      linkedIns: result.linkedIns || [],
-      twitters: result.twitters || [],
-      instagrams: result.instagrams || [],
-      facebooks: result.facebooks || [],
-      youtubes: result.youtubes || [],
-      tiktoks: result.tiktoks || [],
-      pinterests: result.pinterests || [],
-      discords: result.discords || [],
-      snapchats: result.snapchats || [],
-      threads: result.threads || [],
-      telegrams: result.telegrams || []
-    };
 
   } catch (error) {
     console.error(`❌ Error scraping ${url}:`, error.message);
