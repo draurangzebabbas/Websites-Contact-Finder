@@ -1,4 +1,4 @@
-//Rotation Added
+//Sync Added
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -110,7 +110,7 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-// Function to call Apify Contact Info Scraper with smart page checking
+// Enhanced function to call Apify Contact Info Scraper with fallback to sync endpoint
 async function callContactInfoScraper(domain, apiKey, specificPath = '') {
   const baseUrl = `https://${domain}`;
   const url = specificPath ? `${baseUrl}${specificPath}` : baseUrl;
@@ -132,6 +132,52 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
   };
 
   try {
+    // First try the faster sync endpoint
+    console.log(`🚀 Trying fast sync endpoint for ${url}`);
+    
+    const syncResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/run-sync?token=${apiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input)
+    });
+
+    if (syncResponse.ok) {
+      const syncData = await syncResponse.json();
+      console.log(`✅ Fast sync endpoint successful for ${url}:`, syncData.length, 'items');
+      
+      // Process results
+      const result = syncData[0] || {};
+      
+      return {
+        page_scraped: url,
+        domain: domain,
+        emails: result.emails || [],
+        phones: result.phones || [],
+        linkedIns: result.linkedIns || [],
+        twitters: result.twitters || [],
+        instagrams: result.instagrams || [],
+        facebooks: result.facebooks || [],
+        youtubes: result.youtubes || [],
+        tiktoks: result.tiktoks || [],
+        pinterests: result.pinterests || [],
+        discords: result.discords || [],
+        snapchats: result.snapchats || [],
+        threads: result.threads || [],
+        telegrams: result.telegrams || []
+      };
+    } else {
+      console.log(`⚠️ Sync endpoint failed (${syncResponse.status}), falling back to async endpoint`);
+    }
+  } catch (error) {
+    console.log(`⚠️ Sync endpoint error, falling back to async endpoint:`, error.message);
+  }
+
+  // Fallback to async endpoint if sync fails
+  try {
+    console.log(`🔄 Using async endpoint fallback for ${url}`);
+    
     const response = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs?token=${apiKey}`, {
       method: 'POST',
       headers: {
@@ -161,10 +207,10 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
     // Wait for completion
     let dataset = null;
     let attempts = 0;
-    const maxAttempts = 30; // 30 seconds timeout
+    const maxAttempts = 120; // 120 seconds timeout (2 minutes) - increased for slow Apify responses
 
     while (!dataset && attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Check every 2 seconds instead of 1
       attempts++;
 
       try {
@@ -177,6 +223,8 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
           console.log(`✅ Apify run completed for ${url}:`, dataset.length, 'items');
         } else if (statusData.status === 'FAILED') {
           throw new Error(`Apify run failed: ${statusData.meta?.errorMessage || 'Unknown error'}`);
+        } else if (statusData.status === 'RUNNING') {
+          console.log(`⏳ Apify run still running for ${url} (attempt ${attempts}/${maxAttempts})`);
         }
       } catch (error) {
         console.error(`❌ Error checking run status for ${url}:`, error.message);
@@ -187,7 +235,7 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
     }
 
     if (!dataset) {
-      throw new Error('Apify run timed out');
+      throw new Error(`Apify run timed out after ${maxAttempts * 2} seconds. The website might be slow or Apify servers are overloaded.`);
     }
 
     // Process results
