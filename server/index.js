@@ -133,10 +133,10 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
   };
 
   try {
-    // Use the EXACT same approach as Make.com - direct async endpoint
-    console.log(`🚀 Using Apify Contact Details Scraper for ${url}`);
+    // Use the EXACT same approach as Make.com - sync endpoint
+    console.log(`🚀 Using Apify Contact Details Scraper SYNC for ${url}`);
     
-    const response = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs?token=${apiKey}`, {
+    const syncResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/run-sync?token=${apiKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -144,50 +144,17 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
       body: JSON.stringify(input)
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Apify API error: ${response.status} - ${errorText}`);
+    if (!syncResponse.ok) {
+      const errorText = await syncResponse.text();
+      throw new Error(`Apify sync failed: ${syncResponse.status} - ${errorText}`);
     }
 
-    const runData = await response.json();
-    console.log(`✅ Apify run started for ${url}:`, runData.id);
-
-    // Wait for completion with reasonable timeout
-    let dataset = null;
-    let attempts = 0;
-    const maxAttempts = 90; // 90 seconds timeout (3 minutes)
-
-    while (!dataset && attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Check every 2 seconds
-      attempts++;
-
-      try {
-        const statusResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs/${runData.id}?token=${apiKey}`);
-        const statusData = await statusResponse.json();
-
-        if (statusData.status === 'SUCCEEDED') {
-          const datasetResponse = await fetch(`https://api.apify.com/v2/acts/vdrmota~contact-info-scraper/runs/${runData.id}/dataset/items?token=${apiKey}`);
-          dataset = await datasetResponse.json();
-          console.log(`✅ Apify run completed for ${url}:`, dataset.length, 'items');
-        } else if (statusData.status === 'FAILED') {
-          throw new Error(`Apify run failed: ${statusData.meta?.errorMessage || 'Unknown error'}`);
-        } else if (statusData.status === 'RUNNING') {
-          console.log(`⏳ Apify run still running for ${url} (attempt ${attempts}/${maxAttempts})`);
-        }
-      } catch (error) {
-        console.error(`❌ Error checking run status for ${url}:`, error.message);
-        if (attempts >= maxAttempts) {
-          throw error;
-        }
-      }
-    }
-
-    if (!dataset) {
-      throw new Error(`Apify run timed out after ${maxAttempts * 2} seconds`);
-    }
-
+    // Get data immediately (like Make.com)
+    const syncData = await syncResponse.json();
+    console.log(`✅ Apify sync successful for ${url}:`, syncData.length, 'items');
+    
     // Process results exactly like Make.com does
-    const result = dataset[0] || {};
+    const result = syncData[0] || {};
     console.log(`📊 Raw Apify result for ${url}:`, {
       emails: result.emails?.length || 0,
       phones: result.phones?.length || 0,
