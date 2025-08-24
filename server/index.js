@@ -146,6 +146,12 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
 
     if (!syncResponse.ok) {
       const errorText = await syncResponse.text();
+      
+      // Check if it's an authentication error
+      if (syncResponse.status === 401) {
+        throw new Error(`INVALID_API_KEY: Apify authentication failed - key may be expired or invalid`);
+      }
+      
       throw new Error(`Apify sync failed: ${syncResponse.status} - ${errorText}`);
     }
 
@@ -418,6 +424,56 @@ async function getSmartKeyAssignment(userId) {
     
     // Status priority (lower = higher priority)
     switch(key.status) {
+      case 'active':
+        score += 1000;
+        break;
+      case 'rate_limited':
+        score += 2000;
+        break;
+      default:
+        score += 3000;
+    }
+    
+    // Add hours since last use (older = higher priority)
+    if (key.last_used) {
+      const hoursSinceLastUse = (Date.now() - new Date(key.last_used).getTime()) / (1000 * 60 * 60);
+      score += hoursSinceLastUse;
+    } else {
+      score += 24; // Never used = 24 hours
+    }
+    
+    // Add failure count penalty
+    score += (key.failure_count || 0);
+    
+    return { ...key, priorityScore: score };
+  });
+
+  // Sort by priority score (ascending = best first)
+  prioritizedKeys.sort((a, b) => a.priorityScore - b.priorityScore);
+
+  // Log all keys with their scores
+  prioritizedKeys.forEach(key => {
+    console.log(`📊 Key ${key.key_name}: status=${key.status}, score=${key.priorityScore.toFixed(2)}, last_used=${key.last_used || 'never'}, failures=${key.failure_count || 0}`);
+  });
+
+  const selectedKey = prioritizedKeys[0];
+  console.log(`🎯 Selected key: ${selectedKey.key_name} (score: ${selectedKey.priorityScore.toFixed(2)})`);
+  
+  return selectedKey;
+}
+
+  if (availableKeys.length === 0) {
+    throw new Error('No API keys available (all are failed or still rate limited)');
+  }
+
+  console.log(`✅ Found ${availableKeys.length} available keys after filtering`);
+
+  // Calculate priority score for each key
+  const prioritizedKeys = availableKeys.map(key => {
+    let score = 0;
+    
+    // Status priority (lower = higher priority)
+    switch(key.status) {
       case 'active': score += 1000; break;
       case 'rate_limited': score += 2000; break;
       default: score += 3000; break;
@@ -657,14 +713,14 @@ app.post('/api/extract-contacts', rateLimitMiddleware, authMiddleware, async (re
           
           // Check if it's a rate limit, credit issue, or invalid key
           const isRateLimit = error.message.includes('rate') || error.message.includes('credit') || error.message.includes('429');
-          const isInvalidKey = error.message.includes('Invalid API key') || error.message.includes('401');
+          const isInvalidKey = error.message.includes('Invalid API key') || error.message.includes('401') || error.message.includes('INVALID_API_KEY');
           
           if (isRateLimit) {
             await updateKeyStatus(currentKey.id, 'rate_limited');
             console.log(`⚠️ Marked API key as rate limited: ${currentKey.key_name}`);
           } else if (isInvalidKey) {
             await updateKeyStatus(currentKey.id, 'failed');
-            console.log(`❌ Marked API key as failed: ${currentKey.key_name}`);
+            console.log(`❌ Marked API key as failed (invalid/expired): ${currentKey.key_name}`);
           } else {
             await updateKeyStatus(currentKey.id, 'failed');
             console.log(`⚠️ Marked API key as failed: ${currentKey.key_name}`);
