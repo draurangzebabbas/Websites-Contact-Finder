@@ -116,12 +116,11 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
   
   console.log(`🔍 Scraping: ${url}`);
   
-  // Use the EXACT same input as Make.com
+  // Use EXACT same input as Make.com workflow
   const input = {
-    considerChildFrames: true,           // Changed to match Make.com
+    considerChildFrames: false,          // EXACT match with Make.com
     maxDepth: 0,
     maxRequests: 1,
-    maxRequestsPerStartUrl: 1,          // Added to match Make.com
     sameDomain: true,
     startUrls: [
       {
@@ -129,7 +128,7 @@ async function callContactInfoScraper(domain, apiKey, specificPath = '') {
         method: "GET"
       }
     ],
-    useBrowser: false                    // Changed to match Make.com
+    useBrowser: true                     // EXACT match with Make.com
   };
 
   try {
@@ -456,45 +455,6 @@ async function getSmartKeyAssignment(userId) {
     console.log(`📊 Key ${key.key_name}: status=${key.status}, score=${key.priorityScore.toFixed(2)}, last_used=${key.last_used || 'never'}, failures=${key.failure_count || 0}`);
   });
 
-  const selectedKey = prioritizedKeys[0];
-  console.log(`🎯 Selected key: ${selectedKey.key_name} (score: ${selectedKey.priorityScore.toFixed(2)})`);
-  
-  return selectedKey;
-}
-
-  if (availableKeys.length === 0) {
-    throw new Error('No API keys available (all are failed or still rate limited)');
-  }
-
-  console.log(`✅ Found ${availableKeys.length} available keys after filtering`);
-
-  // Calculate priority score for each key
-  const prioritizedKeys = availableKeys.map(key => {
-    let score = 0;
-    
-    // Status priority (lower = higher priority)
-    switch(key.status) {
-      case 'active': score += 1000; break;
-      case 'rate_limited': score += 2000; break;
-      default: score += 3000; break;
-    }
-    
-    // Time-based priority (older = higher priority)
-    const lastUsed = key.last_used ? new Date(key.last_used).getTime() : 0;
-    const hoursSinceLastUse = lastUsed > 0 ? (Date.now() - lastUsed) / (1000 * 60 * 60) : 24; // Default to 24 hours if never used
-    score += hoursSinceLastUse;
-    
-    // Failure count penalty
-    score += (key.failure_count * 100);
-    
-    console.log(`📊 Key ${key.key_name}: status=${key.status}, score=${score.toFixed(2)}, last_used=${key.last_used || 'never'}, failures=${key.failure_count}`);
-    
-    return { ...key, priorityScore: score };
-  });
-
-  // Sort by priority score (ascending = highest priority first)
-  prioritizedKeys.sort((a, b) => a.priorityScore - b.priorityScore);
-  
   const selectedKey = prioritizedKeys[0];
   console.log(`🎯 Selected key: ${selectedKey.key_name} (score: ${selectedKey.priorityScore.toFixed(2)})`);
   
