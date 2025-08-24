@@ -234,11 +234,9 @@ async function callContactInfoScraperWithAggregation(domain, apiKey) {
       social_media: aggregatedData.linkedIns.length + aggregatedData.facebooks.length + aggregatedData.twitters.length
     });
     
-    // If we found emails on main page, we're done!
+    // Note: We found emails on main page, but continue checking other pages for more contacts
     if (aggregatedData.emails.length > 0) {
-      console.log(`📧 Emails found on main page for ${domain}, stopping here`);
-      aggregatedData.page_scraped = `https://${domain}`;
-      return aggregatedData;
+      console.log(`📧 Emails found on main page for ${domain}, but continuing to check other pages for more contacts`);
     }
   } catch (error) {
     console.error(`❌ Error scraping main page for ${domain}:`, error.message);
@@ -279,11 +277,9 @@ async function callContactInfoScraperWithAggregation(domain, apiKey) {
       social_media: aggregatedData.linkedIns.length + aggregatedData.facebooks.length + aggregatedData.twitters.length
     });
     
-    // If we found emails on contact page, we're done!
+    // Note: We found emails on /contact page, but continue checking /contact-us for more contacts
     if (aggregatedData.emails.length > 0) {
-      console.log(`📧 Emails found on /contact page for ${domain}, stopping here`);
-      aggregatedData.page_scraped = `https://${domain} (main + /contact)`;
-      return aggregatedData;
+      console.log(`📧 Emails found on /contact page for ${domain}, but continuing to check /contact-us for more contacts`);
     }
   } catch (error) {
     console.error(`❌ Error scraping /contact page for ${domain}:`, error.message);
@@ -336,6 +332,14 @@ async function callContactInfoScraperWithAggregation(domain, apiKey) {
       phones_data: aggregatedData.phones,
       linkedins_data: aggregatedData.linkedIns
     });
+      
+      // Log how many pages were actually checked
+      const pagesChecked = [];
+      if (aggregatedData.page_scraped.includes('main')) pagesChecked.push('main');
+      if (aggregatedData.page_scraped.includes('/contact')) pagesChecked.push('/contact');
+      if (aggregatedData.page_scraped.includes('/contact-us')) pagesChecked.push('/contact-us');
+      
+      console.log(`📋 Pages checked for ${domain}: ${pagesChecked.join(', ')} (${pagesChecked.length}/3 pages)`);
 
   return aggregatedData;
 }
